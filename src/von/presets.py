@@ -19,8 +19,10 @@ def triage_preset() -> Dict[str, Any]:
         ),
         "is_urgent": Noul(
             instructions="Does the customer communicate extreme urgency, critical outage, or impending deadline?",
-            pos_criteria="Urgent, production down, emergency, immediate attention needed",
-            neg_criteria="Routine question, low priority, general feedback",
+            criteria={
+                "true": "Urgent, production down, emergency, immediate attention needed",
+                "false": "Routine question, low priority, general feedback",
+            },
         ),
         "frustration": Score(
             instructions="Rate the customer frustration level.",
@@ -33,8 +35,10 @@ def triage_preset() -> Dict[str, Any]:
         ),
         "churn_risk": Noul(
             instructions="Does the message indicate high risk of the customer leaving or churning?",
-            pos_criteria="Threatening to switch to competitors, cancel contract, or stop using product",
-            neg_criteria="Committed user asking for help, no mention of leaving",
+            criteria={
+                "true": "Threatening to switch to competitors, cancel contract, or stop using product",
+                "false": "Committed user asking for help, no mention of leaving",
+            },
         ),
     }
 
@@ -55,8 +59,10 @@ def email_preset(custom_categories: Optional[Dict[str, str]] = None) -> Dict[str
         ),
         "is_spam_or_phishing": Noul(
             instructions="Is this email an unsolicited sales pitch, scam, or phishing attempt?",
-            pos_criteria="Spam, promotional blast, credential harvesting, phishing",
-            neg_criteria="Legitimate user or customer inquiry",
+            criteria={
+                "true": "Spam, promotional blast, credential harvesting, phishing",
+                "false": "Legitimate user or customer inquiry",
+            },
         ),
         "priority": Score(
             instructions="What priority level should be assigned to this email?",
@@ -84,8 +90,10 @@ def moderation_preset() -> Dict[str, Any]:
         ),
         "should_block": Noul(
             instructions="Should this content be immediately blocked from publication?",
-            pos_criteria="Clear violation requiring immediate rejection",
-            neg_criteria="Safe or borderline content that can be published or reviewed",
+            criteria={
+                "true": "Clear violation requiring immediate rejection",
+                "false": "Safe or borderline content that can be published or reviewed",
+            },
         ),
         "severity": Score(
             instructions="Rate the severity of the content risk.",
@@ -114,8 +122,10 @@ def security_preset() -> Dict[str, Any]:
         ),
         "is_threat": Noul(
             instructions="Does this state represent an active, confirmed malicious security threat?",
-            pos_criteria="Active cyber attack, intrusion, or unauthorized compromise",
-            neg_criteria="Normal operational glitch, user error, or benign variance",
+            criteria={
+                "true": "Active cyber attack, intrusion, or unauthorized compromise",
+                "false": "Normal operational glitch, user error, or benign variance",
+            },
         ),
         "severity": Score(
             instructions="Rate the incident severity.",

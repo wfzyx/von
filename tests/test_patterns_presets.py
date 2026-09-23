@@ -29,6 +29,31 @@ def test_presets_structure():
     assert "is_threat" in sec
 
 
+def test_preset_nouls_carry_explicit_criteria():
+    # Without explicit criteria the backend falls back to zero-shot debiasing,
+    # which is what the presets silently did while passing pos/neg_criteria.
+    for preset in (triage_preset(), email_preset(), moderation_preset(), security_preset()):
+        for q_id, q in preset.items():
+            if isinstance(q, Noul):
+                assert q.criteria and q.criteria.get("true") and q.criteria.get("false"), q_id
+
+
+def test_noul_legacy_criteria_kwargs_are_folded():
+    with pytest.warns(DeprecationWarning):
+        q = Noul(instructions="Is it down?", pos_criteria="Down", neg_criteria="Up")
+    assert q.criteria == {"true": "Down", "false": "Up"}
+    assert "pos_criteria" not in q.model_dump()
+
+    with pytest.warns(DeprecationWarning):
+        q = Noul.model_validate({"type": "noul", "instructions": "Is it down?", "pos_criteria": "Down"})
+    assert q.criteria == {"true": "Down"}
+
+
+def test_noul_legacy_criteria_conflict_raises():
+    with pytest.raises(ValueError):
+        Noul(instructions="Is it down?", criteria={"true": "Down"}, pos_criteria="Also down")
+
+
 def test_patterns_route():
     state = "The customer wants an immediate refund for their unused subscription."
     q = Choice(
@@ -63,8 +88,10 @@ def test_patterns_confidence_gate():
     questions = {
         "is_outage": Noul(
             instructions="Is there an active database outage?",
-            pos_criteria="Database crash, pool exhausted, downtime",
-            neg_criteria="Normal operational query, no crash"
+            criteria={
+                "true": "Database crash, pool exhausted, downtime",
+                "false": "Normal operational query, no crash",
+            }
         )
     }
 
@@ -83,8 +110,10 @@ def test_patterns_composite_score():
         ),
         "blocking": Noul(
             instructions="Is this blocking?",
-            pos_criteria="Critical blocking outage",
-            neg_criteria="Non-blocking"
+            criteria={
+                "true": "Critical blocking outage",
+                "false": "Non-blocking",
+            }
         )
     }
 

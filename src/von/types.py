@@ -1,7 +1,14 @@
 """Types and schemas for Von decision primitives."""
 
+import warnings
 from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+
+
+# Legacy spellings of Noul's criteria keys. The presets once passed these, and
+# pydantic's default extra="ignore" dropped them silently, so every such Noul ran
+# zero-shot with context-free debiasing instead of against its stated criteria.
+_LEGACY_NOUL_CRITERIA = {"pos_criteria": "true", "neg_criteria": "false"}
 
 
 class Noul(BaseModel):
@@ -9,6 +16,30 @@ class Noul(BaseModel):
     type: Literal["noul"] = "noul"
     instructions: str
     criteria: Optional[Dict[str, str]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_legacy_criteria(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or not any(k in data for k in _LEGACY_NOUL_CRITERIA):
+            return data
+        data = dict(data)
+        criteria = dict(data.get("criteria") or {})
+        for legacy, key in _LEGACY_NOUL_CRITERIA.items():
+            if legacy not in data:
+                continue
+            value = data.pop(legacy)
+            if key in criteria:
+                raise ValueError(f"Noul got both '{legacy}' and criteria['{key}']; use criteria only.")
+            if value:
+                criteria[key] = value
+        warnings.warn(
+            "Noul pos_criteria/neg_criteria are deprecated; "
+            "use criteria={'true': ..., 'false': ...}.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        data["criteria"] = criteria or None
+        return data
 
 
 class Choice(BaseModel):
