@@ -131,6 +131,7 @@ def main() -> None:
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
     ap.add_argument("--no-chat", action="store_true", help="raw prompt instead of the chat template")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--ids", default="", help="JSON list of item ids to restrict to (dev slice)")
     ap.add_argument("--dump", default="")
     ap.add_argument("--style", default="framed", choices=PROMPT_STYLES)
     ap.add_argument("--server", default="", help="llama-server base URL (e.g. http://127.0.0.1:8080); skips in-process loading")
@@ -151,6 +152,9 @@ def main() -> None:
     rows: List[dict] = []
     for t in args.tiers:
         rows.extend(load_rows(TIER_FILES[t]))
+    if args.ids:
+        keep = set(json.load(open(args.ids)))
+        rows = [r for r in rows if r["id"] in keep]
     if args.limit:
         rows = rows[:args.limit]
     # Longest first so a stall shows up early and progress estimates are honest.
