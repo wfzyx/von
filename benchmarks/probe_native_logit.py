@@ -42,12 +42,27 @@ from benchmarks.eval_hard_fast import TIER_FILES, build_request, load_rows  # no
 LETTERS = "ABCDEFGHIJKLMNOP"
 
 
-def _prompt(state: str, instructions: str, keys: List[str], crit: Dict[str, str]) -> str:
-    opts = "\n".join(f"{LETTERS[i]}. {crit[k]}" for i, k in enumerate(keys))
+PROMPT_STYLES = ("qa", "framed")
+
+
+def _prompt(state: str, instructions: str, keys: List[str], crit: Dict[str, str], style: str = "framed") -> str:
+    if style == "qa":
+        opts = "\n".join(f"{LETTERS[i]}. {crit[k]}" for i, k in enumerate(keys))
+        return (
+            "You are a careful decision engine. Read the document, then answer the question "
+            "by choosing exactly one lettered option. Respond with the letter only.\n\n"
+            f"DOCUMENT:\n{state}\n\nQUESTION: {instructions}\n\nOPTIONS:\n{opts}\n\nAnswer:"
+        )
+    # "framed": the instruction is task framing that comes BEFORE the input, so
+    # its caveat sentences ("...use coding_agent even if...", "a mention does
+    # not establish intent") stop reading as an answer hint sitting next to
+    # the options. Keys are shown with their descriptions.
+    opts = "\n".join(f"{LETTERS[i]}. {k.replace('_', ' ')} \u2014 {crit[k]}" for i, k in enumerate(keys))
     return (
-        "You are a careful decision engine. Read the document, then answer the question "
-        "by choosing exactly one lettered option. Respond with the letter only.\n\n"
-        f"DOCUMENT:\n{state}\n\nQUESTION: {instructions}\n\nOPTIONS:\n{opts}\n\nAnswer:"
+        f"Task: {instructions}\n\n"
+        f"Input:\n{state}\n\n"
+        f"Options:\n{opts}\n\n"
+        "Which single option is correct for this input? Reply with the letter only.\nAnswer:"
     )
 
 
@@ -59,6 +74,34 @@ def _letter_token_ids(tok, n: int) -> List[int]:
             cand = tok(LETTERS[i], add_special_tokens=False)["input_ids"]
         ids.append(cand[-1])
     return ids
+
+
+def score_item_server(url: str, prompt: str, n_opts: int) -> List[float]:
+    """llama-server path: one /completion call, next-token distribution read
+    from top_logprobs and renormalized over the option letters. Same readout
+    as the in-process path, on a quantized GGUF at llama.cpp speed."""
+    import math
+    import urllib.request
+    letters = LETTERS[:n_opts]
+    body = json.dumps({
+        "prompt": prompt, "n_predict": 1, "temperature": 0, "n_probs": 30, "cache_prompt": False,
+    }).encode()
+    req = urllib.request.Request(url.rstrip("/") + "/completion", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3600) as r:
+        out = json.loads(r.read())
+    probs = [0.0] * n_opts
+    cands = out.get("completion_probabilities") or []
+    top = (cands[0].get("top_logprobs") or cands[0].get("top_probs") or []) if cands else []
+    for c in top:
+        t = (c.get("token") or "").strip().rstrip(".")
+        if len(t) == 1 and t in letters:
+            lp = c.get("logprob")
+            probs[letters.index(t)] += math.exp(lp) if lp is not None else float(c.get("prob", 0.0))
+    tot = sum(probs)
+    if tot <= 0:
+        return [1.0 / n_opts] * n_opts
+    return [p / tot for p in probs]
 
 
 @torch.no_grad()
@@ -89,15 +132,21 @@ def main() -> None:
     ap.add_argument("--no-chat", action="store_true", help="raw prompt instead of the chat template")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--dump", default="")
+    ap.add_argument("--style", default="framed", choices=PROMPT_STYLES)
+    ap.add_argument("--server", default="", help="llama-server base URL (e.g. http://127.0.0.1:8080); skips in-process loading")
     args = ap.parse_args()
 
-    torch.set_num_threads(args.threads)
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    if args.server:
+        tok = model = None
+        use_chat = not args.no_chat
+    else:
+        torch.set_num_threads(args.threads)
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(args.model)
-    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=getattr(torch, args.dtype))
-    model.eval()
-    use_chat = (not args.no_chat) and tok.chat_template is not None
+        tok = AutoTokenizer.from_pretrained(args.model)
+        model = AutoModelForCausalLM.from_pretrained(args.model, dtype=getattr(torch, args.dtype))
+        model.eval()
+        use_chat = (not args.no_chat) and tok.chat_template is not None
 
     rows: List[dict] = []
     for t in args.tiers:
@@ -114,7 +163,13 @@ def main() -> None:
         state, instr, crit = build_request(row, "plain")
         keys = list(crit)
         qtype = row["question"].get("type", "choice")
-        probs = score_item(model, tok, _prompt(state, instr, keys, crit), len(keys), args.max_ctx, use_chat)
+        prompt = _prompt(state, instr, keys, crit, args.style)
+        if args.server:
+            if not args.no_chat:  # Qwen chat wrapping, thinking off; server /completion applies no template itself
+                prompt = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            probs = score_item_server(args.server, prompt, len(keys))
+        else:
+            probs = score_item(model, tok, prompt, len(keys), args.max_ctx, use_chat)
         pick_key = keys[max(range(len(keys)), key=lambda j: probs[j])]
         pick = {"true": "yes", "false": "no"}.get(pick_key, pick_key) if qtype == "noul" else pick_key
         gold = str(row["expected"]).strip().lower()
