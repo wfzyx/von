@@ -1,0 +1,70 @@
+name: Build and Publish Image
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'assets/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: Build and publish CPU image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          # GHCR rejects uppercase names; repository owners may be mixed-case.
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          calver="$(date -u +%Y.%m.%d.%H.%M)"
+          {
+            echo "list<<TAGS_EOF"
+            echo "${image}:${calver}"
+            echo "${image}:latest"
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          build-args: |
+            TORCH_BACKEND=cpu
+          tags: ${{ steps.tags.outputs.list }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.title=von
+            org.opencontainers.image.description=Von System One decision model (cpu)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
