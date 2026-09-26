@@ -85,6 +85,11 @@ def score_item_server(url: str, prompt: str, n_opts: int) -> List[float]:
     letters = LETTERS[:n_opts]
     body = json.dumps({
         "prompt": prompt, "n_predict": 1, "temperature": 0, "n_probs": 30, "cache_prompt": False,
+        # Grammar constrains the *sampled* token to a letter; top_logprobs stay
+        # pre-grammar, so the distribution is still the model's own. If no
+        # letter carries mass in the top-30 (tokenizers that want "\n" or "**"
+        # first), fall back to the constrained sample as an argmax-only answer.
+        "grammar": "root ::= [" + letters + "]",
     }).encode()
     req = urllib.request.Request(url.rstrip("/") + "/completion", data=body,
                                  headers={"Content-Type": "application/json"})
@@ -100,7 +105,12 @@ def score_item_server(url: str, prompt: str, n_opts: int) -> List[float]:
             probs[letters.index(t)] += math.exp(lp) if lp is not None else float(c.get("prob", 0.0))
     tot = sum(probs)
     if tot <= 0:
-        return [1.0 / n_opts] * n_opts
+        t = (out.get("content") or "").strip()
+        if t in letters:
+            probs[letters.index(t)] = 1.0
+            tot = 1.0
+        else:
+            return [1.0 / n_opts] * n_opts
     return [p / tot for p in probs]
 
 
@@ -134,6 +144,8 @@ def main() -> None:
     ap.add_argument("--ids", default="", help="JSON list of item ids to restrict to (dev slice)")
     ap.add_argument("--dump", default="")
     ap.add_argument("--style", default="framed", choices=PROMPT_STYLES)
+    ap.add_argument("--template", default="qwen", choices=["qwen", "server", "none"],
+                    help="server path only: qwen = ChatML w/ empty think block; server = model's own template via /apply-template")
     ap.add_argument("--server", default="", help="llama-server base URL (e.g. http://127.0.0.1:8080); skips in-process loading")
     args = ap.parse_args()
 
@@ -169,8 +181,20 @@ def main() -> None:
         qtype = row["question"].get("type", "choice")
         prompt = _prompt(state, instr, keys, crit, args.style)
         if args.server:
-            if not args.no_chat:  # Qwen chat wrapping, thinking off; server /completion applies no template itself
+            if args.template == "qwen":  # Qwen ChatML, thinking off; /completion applies no template itself
                 prompt = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            elif args.template == "server":  # the GGUF's own chat template via llama-server
+                import urllib.request
+                body = json.dumps({"messages": [{"role": "user", "content": prompt}]}).encode()
+                req = urllib.request.Request(args.server.rstrip("/") + "/apply-template", data=body,
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    prompt = json.loads(r.read())["prompt"]
+                # Thinking-mode templates leave "<think>" open, so the next token
+                # is the start of a rationale ("The...") and no letter has mass.
+                # Close the block: we read the answer, we don't decode reasoning.
+                if prompt.rstrip().endswith("<think>"):
+                    prompt = prompt.rstrip() + "\n\n</think>\n\n"
             probs = score_item_server(args.server, prompt, len(keys))
         else:
             probs = score_item(model, tok, prompt, len(keys), args.max_ctx, use_chat)
