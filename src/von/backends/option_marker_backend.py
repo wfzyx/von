@@ -6,6 +6,7 @@ Executes single-pass non-autoregressive decision evaluation:
 - Score: Single-pass ordinal rating over all levels simultaneously.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -222,12 +223,26 @@ def _ov_core_with_cache(target: str):
     return core, cache_dir
 
 
+def _openvino_encoder_cache_key(encoder: torch.nn.Module) -> str:
+    import openvino as ov
+
+    # A release name or checkpoint path does not identify fine-tuned/replaced weights.
+    digest = hashlib.sha256()
+    digest.update(f"{type(encoder).__module__}.{type(encoder).__qualname__}:{torch.__version__}:{ov.__version__}".encode())
+    digest.update(encoder.config.to_json_string(use_diff=False).encode())
+    for name, tensor in sorted(encoder.state_dict().items()):
+        digest.update(f"{name}:{tensor.dtype}:{tuple(tensor.shape)}".encode())
+        # View bytes directly: supports bfloat16 without allocating a second weights blob.
+        digest.update(tensor.detach().cpu().contiguous().reshape(-1).view(torch.uint8).numpy())
+    return digest.hexdigest()
+
+
 def _compile_openvino_encoder(encoder: torch.nn.Module, target: str = "GPU") -> torch.nn.Module:
     """Compiles the PyTorch ModernBERT encoder (plain mode) to OpenVINO with disk caching."""
     import openvino as ov
 
     core, cache_dir = _ov_core_with_cache(target)
-    xml_path = os.path.join(cache_dir, f"encoder_{VON_MODEL_ID}.xml")
+    xml_path = os.path.join(cache_dir, f"encoder_{VON_MODEL_ID}_{_openvino_encoder_cache_key(encoder)}.xml")
     if os.path.exists(xml_path):
         compiled_model = core.compile_model(xml_path, device_name=target)
     else:
@@ -254,7 +269,7 @@ def _compile_openvino_independent_encoder(encoder: torch.nn.Module, target: str 
     import openvino as ov
 
     core, cache_dir = _ov_core_with_cache(target)
-    xml_path = os.path.join(cache_dir, f"encoder_indep_{VON_MODEL_ID}.xml")
+    xml_path = os.path.join(cache_dir, f"encoder_indep_{VON_MODEL_ID}_{_openvino_encoder_cache_key(encoder)}.xml")
     if os.path.exists(xml_path):
         compiled_model = core.compile_model(xml_path, device_name=target)
     else:
