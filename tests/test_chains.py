@@ -42,6 +42,15 @@ def test_propose_datetimes_durations_zones_amounts():
     assert [p.value for p in by_kind(sp, "percent")] == [8.0]
 
 
+def test_propose_plain_utc_is_a_zone():
+    # "UTC" doesn't end in T, so the abbreviation pattern alone never matched it.
+    sp = propose("The call is on 3 September 2026 at 14:00 UTC. The backup slot is 4 Sep 2026 09:00 UTC+2.")
+    dts = by_kind(sp, "datetime")
+    assert [d.text for d in dts] == ["3 September 2026 at 14:00 UTC", "4 Sep 2026 09:00 UTC+2"]
+    assert [d.meta["zone"] for d in dts] == [{"offset_h": 0}, {"offset_h": 2.0}]
+    assert [z.value for z in by_kind(sp, "timezone")] == [{"offset_h": 0}, {"offset_h": 2.0}]
+
+
 def test_propose_skips_years_and_ordinals_as_amounts():
     sp = propose("Clause 12 of the 2026 policy, item 7, serial 5540981.")
     assert by_kind(sp, "amount") == []

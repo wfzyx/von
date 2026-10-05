@@ -61,7 +61,7 @@ class Span:
 
 _MONTH_RE = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
 _TIME_RE = r"(?<![\d.,])(?P<h>[01]?\d|2[0-3]):(?P<mi>[0-5]\d)(?!\d|\.\d)(?:\s*(?P<ampm>am|pm))?"
-_ZONE_RE = r"(?P<zone>utc\s*[+\-−–]\s*\d{1,2}(?::?\d{2})?|[A-Z]{2,4}T\b|(?:" + "|".join(re.escape(c) for c in sorted(CITY_ZONES, key=len, reverse=True)) + r")(?:\s+(?:local\s+)?time)?)"
+_ZONE_RE = r"(?P<zone>utc\s*[+\-−–]\s*\d{1,2}(?::?\d{2})?|utc\b|[A-Z]{2,4}T\b|(?:" + "|".join(re.escape(c) for c in sorted(CITY_ZONES, key=len, reverse=True)) + r")(?:\s+(?:local\s+)?time)?)"
 
 DATE_PATTERNS = [
     # 31 August 2026 / 3 Sep 2027 / 14 September
