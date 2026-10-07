@@ -1,6 +1,6 @@
 # Von 2 — state of the research and next steps
 
-Last updated 2026-10-03 after von-2-nano r2. This is the single file to read after a machine wipe. Everything it
+Last updated 2026-10-07: r3 data staged (polarity pairs built, `extra_r3.jsonl` + src tarball in S3), launch pending. This is the single file to read after a machine wipe. Everything it
 references is in this repo, in `s3://model-weight/`, or on HuggingFace; nothing load-bearing lives only on a laptop.
 
 ## 1. Why Von 2 exists
@@ -107,13 +107,29 @@ rows where the *same state* carries a *negated criterion* with a flipped label, 
 
 **Do now (one run, r3, ~$35):**
 
-1. **Noul polarity data.** From the existing universal + Jeff Noul rows, generate contrastive pairs: same state,
-   criterion negated ("does X hold" ↔ "does X fail to hold"), label flipped. ~20k rows. Checks: polarity probe on
-   evidence_noul (held-out, never tuned) and the picked-yes ratio on the 400 held-out Noul items moving toward 195/205.
-2. **More labelled public rows, same recipe.** Remaining Jeff converters not yet pulled (see firelex/jeff
-   `docs/data-sources.md` and `src/jeff/extra.py`), plus the judge sources in `prepare_judge_diversity.py` at higher
-   per-source caps. Also restore universal share: r2 dropped it to 47% and paid in jabr; try 200k universal.
+1. **Noul polarity data — BUILT 2026-10-07.** `training/prepare_noul_polarity.py` (tests: `tests/test_noul_polarity.py`)
+   takes Noul rows from any corpus and emits (original, twin) pairs: same state, negated criterion, flipped label
+   and reversed soft target. Twin kinds: auxiliary negation of the question with yes/no descriptions swapped (50%),
+   `Is this statement false: "<yes description>"` (18%), `Is this statement true: "<no description>"` (18%), and a
+   same-label quoted control (14%) so quoting alone does not read as flipping. Built from a local 200k universal
+   build + the Jeff mix: 10k pairs = 20k rows, 4776 yes / 5224 no, leak-filtered (0 hits).
+   Artefacts: `s3://model-weight/data_polarity/train.jsonl`; `s3://model-weight/data_jeff_mix/extra_r3.jsonl`
+   = extra_r2 (168,030) + polarity (20,000) = 188,030 rows. Src tarball rebuilt with the new script.
+   Checks after r3: polarity probe on evidence_noul (held-out, never tuned) and the picked-yes ratio on the 400
+   held-out Noul items moving toward 195/205.
+2. **Restore universal share.** r2 dropped it to 47% and paid in jabr; r3 runs `--max-train 200000`.
+   Still open (not in r3): remaining Jeff converters (firelex/jeff `docs/data-sources.md`, `src/jeff/extra.py`) and
+   higher per-source caps in `prepare_judge_diversity.py`.
 
+**r3 launch (not yet run):**
+
+```bash
+./.venv/bin/python training/launch_universal_training.py --trainer decoder --on-demand \
+    --region us-east-1 --only-type g5.12xlarge,g6.12xlarge,g6e.12xlarge \
+    --epochs 1 --max-train 200000 --long-context 20000 --synthetic-n 20000 \
+    --extra-train-s3 s3://model-weight/data_jeff_mix/extra_r3.jsonl --extra-rows 188030 \
+    --s3-target s3://model-weight/von-2-nano-r3
+```
 Gate r3 against r2 and Jeff. Target: hold judge ≥ 63, recover jabr toward 79, evidence_noul ≥ 10/14.
 
 **Later (only if r3 plateaus):**
