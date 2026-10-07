@@ -17,6 +17,16 @@ Two facts settled the pivot (both from the 2026-10-01/02 sessions):
 - **Within a size class, recipe and head beat parameter count.** Kev 9B plain = 38.5 DI; Clef-flash 9B + JointSchemaHead
   + LoRA + RL = 57.1. The 18.6-point spread is head + data + RL, not scale.
 
+**Decision Index 0.3 (board generated 2026-10-07, snapshot in `~/scratch/di`, source `multimodalart/jev-decision-index`
+`data/v03.json` + `data/index.json`).** The main ranking is now the Full score: 20% public, 50% private same-skill,
+30% private new-domain, each private part equated to the public scale against 21 stock models. **Von 1.3: Full 8.2,
+#101 of 114** (public 13.9, same-skill 12.8, new-domain 4.9 → equated to 0: below the stock-model average, so the
+new-domain part contributes nothing). Sub-1B peers on the same Qwen3.5-0.8B trunk Von 2 uses: JPT-0.8B LoRA 18.7
+(new-domain 22.0), Tev1 12.0, Intern-Decision 11.8; class leader jiwo 0.8B 24.3. Per-benchmark, Von 1.3 holds the
+intent sets (BANKING77 75 / CLINC150 60 skill, above every 0.8B) and loses everything that needs reading: BFCL 15
+vs 69, ARC-Easy 44 vs 80, ContractNLI 0 vs 61, API-Bank 0 vs 29. Reaching JPT-0.8B's 18.7 is the first bar for
+von-2-nano; its new-domain 22.0 says the trunk generalises when the recipe does not over-fit the universal
+templates — same diagnosis as the Noul polarity defect (§5).
 Von 2 therefore keeps the sub-1B footprint but swaps the trunk to a decoder and adopts the Clef head.
 Von 1.x stays as the CPU/edge SKU (96 ms, 1.9 GB, air-gapped). Von 2 is the GPU SKU.
 
