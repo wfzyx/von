@@ -1,7 +1,23 @@
 # Von 2 — state of the research and next steps
 
-Last updated 2026-10-07: r3 data staged (polarity pairs built, `extra_r3.jsonl` + src tarball in S3), launch pending. This is the single file to read after a machine wipe. Everything it
+Last updated 2026-10-07: r3 training on i-0019086268e409fe9 (g5.12xlarge, us-east-1a); DI adapter for decoder checkpoints
+built. This is the single file to read after a machine wipe. Everything it
 references is in this repo, in `s3://model-weight/`, or on HuggingFace; nothing load-bearing lives only on a laptop.
+
+## 0. Go / no-go (decided 2026-10-07)
+
+**r3 must beat LiquidAI d1-omni-600M on the Decision Index 0.3 public index — 17.9 — or the project stops.**
+d1-omni-600M is Von 1.x's exact pitch (sub-1B, CPU, GGUF, `/v1/systemone`, plus image + audio) from a funded lab,
+sitting at Full 9.4 / public 17.9, one place above Von 1.3. Clef 27B / clef-flash 9B are a different weight class
+and not the comparison. The private 80% of the Full score cannot be computed locally, so the public index from
+the kit is the bar. Von 1.x gets maintenance only (merge the Go client, keep the server up); no more encoder runs.
+
+How the number is produced: `benchmarks/di_engine_decoder.py` (`VonDecoderEngine`, tests in
+`tests/test_di_engine_decoder.py` against the kit's own `validate`) → `python -m decision_index pipeline
+--engine benchmarks.di_engine_decoder:VonDecoderEngine --option checkpoint_dir=<r3>` on the rebuilt 0.3 suite
+(kit: `~/scratch/ext/decision-index`, ~7 GB downloads, HLE terms on the Hub). One RTX PRO 6000 HF job or the
+same g5 box. If it clears 17.9: submit, then the reframed asset is the open 0.8B recipe + gate + polarity data.
+If not: write the post-mortem into this file and archive.
 
 ## 1. Why Von 2 exists
 
