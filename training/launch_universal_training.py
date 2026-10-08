@@ -132,10 +132,14 @@ aws s3 cp s3://model-weight/von-marker-src.tar.gz /tmp/von-marker-src.tar.gz
 tar -xzf /tmp/von-marker-src.tar.gz -C /opt/von
 cd /opt/von
 
-/root/.local/bin/uv venv --clear /opt/von/.venv
+# Pin the interpreter to the one uv.lock targets. An unpinned venv picked CPython 3.14 and, on 2026-10-07, the
+# solver backtracked `datasets` to 1.1.1 (2020) which imports pyarrow.PyExtensionType (removed) -> r3 died at corpus
+# build. r2 five days earlier had resolved datasets 5.0.1 on the same command.
+/root/.local/bin/uv venv --clear --python 3.12 /opt/von/.venv
 # PyPI ships CUDA-enabled Linux torch wheels; the old cu121 index now 404s and
 # breaks the solve. One install so torch and its dependents resolve together.
-/root/.local/bin/uv pip install --python /opt/von/.venv torch torchvision transformers datasets scipy sentencepiece tiktoken accelerate pydantic awscli {extra_pip}
+/root/.local/bin/uv pip install --python /opt/von/.venv torch torchvision transformers 'datasets>=5,<6' 'pyarrow<26' scipy sentencepiece tiktoken accelerate pydantic awscli {extra_pip}
+/opt/von/.venv/bin/python -c 'import datasets, pyarrow; print("datasets", datasets.__version__, "pyarrow", pyarrow.__version__)'
 export PYTHONPATH="/opt/von/src:$PYTHONPATH"
 
 # Build the Universal Decision Corpus, including the long-context core
