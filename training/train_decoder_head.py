@@ -79,21 +79,33 @@ def make_batches(rows: List[dict], batch_size: int, seed: int, world: int, rank:
     bucket of long rows and starves the GPU on short ones; the budget keeps the padded token count flat.
     """
     rng = random.Random(seed)
-    order = list(range(len(rows)))
-    rng.shuffle(order)
+    # Rows sharing a pair_id (polarity twins) travel as one unit so both land in the same micro-batch and
+    # the contrastive term can see them together. Units are shuffled/sorted/budgeted in place of rows.
+    by_pair: Dict[str, List[int]] = {}
+    units: List[List[int]] = []
+    for i, r in enumerate(rows):
+        pid = r.get("pair_id")
+        if pid:
+            if pid not in by_pair:
+                by_pair[pid] = []
+                units.append(by_pair[pid])
+            by_pair[pid].append(i)
+        else:
+            units.append([i])
+    rng.shuffle(units)
     chunk = batch_size * 64
     batches: List[List[int]] = []
-    for start in range(0, len(order), chunk):
-        piece = sorted(order[start:start + chunk], key=lambda i: estimate_tokens(rows[i]))
+    for start in range(0, len(units), chunk):
+        piece = sorted(units[start:start + chunk], key=lambda u: max(estimate_tokens(rows[i]) for i in u))
         cur: List[int] = []
-        for i in piece:
-            longest = min(max_length, estimate_tokens(rows[i]))  # sorted ascending, so i is the longest so far
-            if cur and (len(cur) >= batch_size or (max_tokens and (len(cur) + 1) * longest > max_tokens)):
+        for u in piece:
+            longest = min(max_length, max(estimate_tokens(rows[i]) for i in u))  # sorted ascending
+            if cur and (len(cur) >= batch_size or (max_tokens and (len(cur) + len(u)) * longest > max_tokens)):
                 # Close at a power-of-two row count so (rows, padded_len) shapes repeat for Triton autotune.
                 keep = 1 << (len(cur).bit_length() - 1)
                 batches.append(cur[:keep])
                 cur = cur[keep:]
-            cur.append(i)
+            cur.extend(u)
         if cur:
             batches.append(cur)
     rng.shuffle(batches)
@@ -107,7 +119,7 @@ PAD_TO = 512  # padded length granularity; see clef_head.collate_records
 
 def encode_batch(tokenizer: Any, rows: List[dict], max_length: int, device: torch.device) -> Tuple[Optional[Dict[str, Any]], List[int], List[Optional[List[float]]]]:
     global SKIPPED_ROWS
-    records, targets, softs = [], [], []
+    records, targets, softs, kept_rows = [], [], [], []
     for row in rows:
         record, target = row_to_record(row)
         try:
@@ -117,11 +129,48 @@ def encode_batch(tokenizer: Any, rows: List[dict], max_length: int, device: torc
             continue
         q = enc.questions[0]
         records.append(enc)
+        kept_rows.append(row)
         targets.append(q.option_ids.index(target))
         softs.append(soft_target_for(row, q.option_ids))
     if not records:
         return None, targets, softs
-    return collate_records(records, tokenizer.pad_token_id, device, pad_to=PAD_TO), targets, softs
+    batch = collate_records(records, tokenizer.pad_token_id, device, pad_to=PAD_TO)
+    batch["pairs"] = polarity_pairs(kept_rows)
+    return batch, targets, softs
+
+
+def polarity_pairs(kept_rows: List[dict]) -> List[Tuple[int, int, int]]:
+    """(index_a, index_b, sign) over the encoded records (same order as kept_rows) for every pair_id present
+    exactly twice in this batch and two-option on both sides.
+
+    sign=1: the twin carries a negated criterion, so P(yes) must move the opposite way to the original.
+    sign=0: same-label control (quoted criterion) -- P(yes) must *not* move.
+    """
+    where: Dict[str, List[Tuple[int, int]]] = {}
+    for n, row in enumerate(kept_rows):
+        pid = row.get("pair_id")
+        if pid and len(row.get("options") or []) == 2:
+            where.setdefault(pid, []).append((n, int(row.get("pair_sign", 1))))
+    return [(m[0][0], m[1][0], m[0][1]) for m in where.values() if len(m) == 2]
+
+
+def polarity_loss(logits_per_row: List[torch.Tensor], pairs: List[Tuple[int, int, int]], margin: float) -> torch.Tensor:
+    """Contrastive term on polarity pairs: the yes-logit margin (logit_yes - logit_no) must flip sign across a
+    negated pair by at least ``margin`` (hinge), and must stay put across a same-label control (L2 on the gap).
+    Returns 0 when the batch holds no pairs. Rows must be two-option (noul)."""
+    terms = []
+    for a, b, sign in pairs:
+        la, lb = logits_per_row[a].float(), logits_per_row[b].float()
+        if la.numel() != 2 or lb.numel() != 2:
+            continue
+        ma, mb = la[0] - la[1], lb[0] - lb[1]
+        if sign:
+            terms.append(torch.nn.functional.softplus(margin - (ma * -mb)))  # want ma and mb opposite in sign
+        else:
+            terms.append((ma - mb) ** 2)
+    if not terms:
+        return logits_per_row[0].new_zeros(())
+    return torch.stack(terms).mean()
 
 
 def decision_loss(logits_per_row: List[torch.Tensor], targets: List[int], softs: List[Optional[List[float]]],
@@ -233,6 +282,9 @@ def main() -> None:
     ap.add_argument("--batch_size", type=int, default=16, help="max rows per micro-batch")
     ap.add_argument("--max_tokens", type=int, default=16384, help="max padded tokens per micro-batch (rows x longest); 0 = rows only")
     ap.add_argument("--grad_accum_steps", type=int, default=4)
+    ap.add_argument("--polarity_weight", type=float, default=0.0,
+                    help="weight of the contrastive term on rows sharing a pair_id (prepare_noul_polarity.py); 0 = off")
+    ap.add_argument("--polarity_margin", type=float, default=2.0, help="hinge margin on the product of yes-logit margins")
     ap.add_argument("--max_length", type=int, default=4096)
     ap.add_argument("--lr", type=float, default=2e-4, help="LoRA learning rate")
     ap.add_argument("--head_lr", type=float, default=5e-4)
@@ -294,6 +346,7 @@ def main() -> None:
     log(f"steps: {total_steps} optimizer steps ({epoch_batches} micro-batches/epoch/rank, accum {a.grad_accum_steps})")
 
     step, micro, seen, run_loss, run_correct, run_n, run_batches = 0, 0, 0, 0.0, 0, 0, 0
+    run_pairs, run_ploss = 0, 0.0
     t0 = time.time()
     model.train()
     epoch = 0
@@ -311,6 +364,10 @@ def main() -> None:
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
                 outs = ddp_model(batch)
             loss, correct = decision_loss([o[0] for o in outs], targets, softs, a.brier_weight, a.label_smoothing)
+            if a.polarity_weight > 0 and batch.get("pairs"):
+                ploss = polarity_loss([o[0] for o in outs], batch["pairs"], a.polarity_margin)
+                loss = loss + a.polarity_weight * ploss
+                run_pairs += len(batch["pairs"]); run_ploss += float(ploss.item()) * len(batch["pairs"])
             (loss / a.grad_accum_steps).backward()
             run_loss += loss.item(); run_correct += correct; run_n += len(rows); seen += len(rows); run_batches += 1
             micro += 1
@@ -322,7 +379,9 @@ def main() -> None:
             if step % 50 == 0 or step == 1:
                 el = time.time() - t0
                 log(f"step {step}/{total_steps} loss {run_loss / max(1, run_batches):.4f} "
-                    f"acc {run_correct/max(1,run_n):.3f} lr {sched.get_last_lr()[0]:.2e} {seen*world/el:.1f} rows/s eta {el/step*(total_steps-step)/60:.0f}min")
+                    f"acc {run_correct/max(1,run_n):.3f} lr {sched.get_last_lr()[0]:.2e} {seen*world/el:.1f} rows/s eta {el/step*(total_steps-step)/60:.0f}min"
+                    + (f" pairs {run_pairs} ploss {run_ploss/run_pairs:.3f}" if run_pairs else ""))
+                run_pairs, run_ploss = 0, 0.0
                 if SKIPPED_ROWS:
                     log(f"  skipped so far (schema > max_length): {SKIPPED_ROWS}")
                 run_loss, run_correct, run_n, run_batches = 0.0, 0, 0, 0

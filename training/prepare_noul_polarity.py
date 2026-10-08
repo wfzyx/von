@@ -322,8 +322,16 @@ def main() -> None:
         seen_states.add(key)
         stats[kind] += 1
         stats[f"label:{twin['label']}"] += 1
+        # pair_id lets the trainer batch the two together and apply a contrastive term across them;
+        # pair_sign is +1 when the twin's label is flipped (polarity), 0 for the same-label control.
+        pid = f"pol{len(seen_states):07d}"
+        twin["pair_id"] = pid
+        twin["pair_sign"] = 0 if kind == "control" else 1
         if not a.no_original:
-            out_rows.append(r)
+            orig = dict(r)
+            orig["pair_id"] = pid
+            orig["pair_sign"] = twin["pair_sign"]
+            out_rows.append(orig)
         out_rows.append(twin)
 
     rng.shuffle(out_rows)

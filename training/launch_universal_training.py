@@ -73,6 +73,7 @@ echo "Detected $NUM_GPUS GPUs. Starting decoder+head DDP training..."
     --lora_r {lora_r} --lora_alpha {lora_alpha} \\
     --head_width {head_width} --head_routing_layers {head_routing_layers} --head_layers {head_layers} \\
     --head_heads {head_heads} --head_feedforward {head_feedforward} {gc_flag} \\
+    --polarity_weight {polarity_weight} --polarity_margin {polarity_margin} \\
     --s3_target {s3_target} \\
     --output_dir checkpoints/von-2-nano
 
@@ -274,7 +275,8 @@ def launch(
             init_ckpt_flag = ""
         if trainer == "decoder":
             d = dict(max_length=4096, lora_r=64, lora_alpha=128, head_width=512, head_routing_layers=1, head_layers=2,
-                     head_heads=8, head_feedforward=2048, eval_name="von-2-nano", gradient_checkpointing=1, max_tokens=16384)
+                     head_heads=8, head_feedforward=2048, eval_name="von-2-nano", gradient_checkpointing=1, max_tokens=16384,
+                     polarity_weight=0.0, polarity_margin=2.0)
             d.update(decoder_opts or {})
             # Measured on 24 GB GPUs: checkpointing + 4x4096-token batches = 6.7 GB and stable; without
             # checkpointing both a 32k-token bucket and a 10k-token budget OOM'd in the deltanet backward.
@@ -418,7 +420,7 @@ if __name__ == "__main__":
                         help="marker = ModernBERT option-marker (default); decoder = Qwen3.5 + LoRA + JointSchemaHead")
     parser.add_argument("--base-model-id", default="", help="Hub id of the backbone (decoder trainer); default Qwen/Qwen3.5-0.8B")
     parser.add_argument("--decoder-opt", action="append", default=[],
-                        help="decoder trainer knob as key=value: max_length, lora_r, lora_alpha, head_width, head_routing_layers, head_layers, head_heads, head_feedforward, eval_name")
+                        help="decoder trainer knob as key=value: max_length, max_tokens, lora_r, lora_alpha, head_width, head_routing_layers, head_layers, head_heads, head_feedforward, eval_name, polarity_weight, polarity_margin")
     parser.add_argument("--extra-rows", type=int, default=0, help="row count of --extra-train-s3, for the watchdog estimate")
     parser.add_argument("--watchdog-min", type=int, default=0,
                         help="hard shutdown ceiling in minutes (0 = derive from epochs)")
@@ -446,5 +448,5 @@ if __name__ == "__main__":
         trainer=args.trainer,
         extra_rows=args.extra_rows,
         base_model_id=args.base_model_id or ("Qwen/Qwen3.5-0.8B" if args.trainer == "decoder" else "wfzyx/von"),
-        decoder_opts={k: (int(v) if v.isdigit() else v) for k, v in (o.split("=", 1) for o in args.decoder_opt)},
+        decoder_opts={k: (int(v) if v.isdigit() else float(v) if v.replace(".", "", 1).isdigit() else v) for k, v in (o.split("=", 1) for o in args.decoder_opt)},
     )
