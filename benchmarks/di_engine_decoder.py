@@ -32,7 +32,24 @@ def _text(x: Any) -> str:
     return x if isinstance(x, str) else json.dumps(x, ensure_ascii=False, separators=(",", ":"))
 
 
-class VonDecoderEngine:
+try:  # the kit's base class carries synchronize/runtime/close; fall back so unit tests import without the kit
+    from decision_index.engines.base import Engine as _Base
+except ImportError:  # pragma: no cover
+    class _Base:  # type: ignore[no-redef]
+        def __init__(self, **options: Any) -> None:
+            self.options = options
+
+        def runtime(self) -> Dict[str, Any]:
+            return {}
+
+        def synchronize(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+
+class VonDecoderEngine(_Base):
     """One joint forward pass per request: every question of the request is packed into the same sequence."""
 
     name = "von-2-nano"
@@ -40,7 +57,7 @@ class VonDecoderEngine:
                "GPU bf16 autocast when available, one request at a time.")
 
     def __init__(self, **options: Any) -> None:
-        self.options = options
+        super().__init__(**options)
         self._checkpoint_dir = options.get("checkpoint_dir") or "checkpoints/von-2-nano"
         self._device_name = options.get("device")
         # 0 = the checkpoint's training max_length. Longer values run the trunk past its trained positions.
@@ -69,6 +86,16 @@ class VonDecoderEngine:
             self._max_length = int(self._cfg.get("max_length", 4096))
         self.provenance["base_model"] = self._cfg.get("base_model_id", self.provenance["base_model"])
         self.provenance["max_length"] = self._max_length
+
+    def synchronize(self) -> None:
+        if self._model is not None and self._device.type == "cuda":
+            import torch
+            torch.cuda.synchronize(self._device)
+
+    def runtime(self) -> Dict[str, Any]:
+        import torch
+        return {"torch": torch.__version__, "device": str(getattr(self, "_device", "unloaded")),
+                "max_length": self._max_length}
 
     def warmup(self) -> None:
         self._load()
