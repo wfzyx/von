@@ -1,5 +1,8 @@
 # Von
 
+> **Status: Archived / Concluded (2026-10-17).**
+> The open-source System One decision model. Calibrated Choice / Noul / Score inference from a 395M ModernBERT encoder, one forward pass, CPU-served. Weights, SDKs, and benchmarks preserved for reference.
+
 **An open-source, non-autoregressive System One decision model.**
 *Calibrated Choice / Noul / Score inference from a 395M ModernBERT encoder, one forward pass, CPU-served.*
 
