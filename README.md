@@ -1,7 +1,6 @@
 # Von
 
-> **Status: Archived / Concluded (2026-10-17).**
-> The open-source System One decision model. Calibrated Choice / Noul / Score inference from a 395M ModernBERT encoder, one forward pass, CPU-served. Weights, SDKs, and benchmarks preserved for reference.
+> **Archived.** Von is no longer maintained and these weights will not be updated. For new projects, use [LiquidAI/d1-omni-600M](https://huggingface.co/LiquidAI/d1-omni-600M), a calibrated System One decision model that also handles images. The weights, SDKs and benchmarks stay available for existing users.
 
 **An open-source, non-autoregressive System One decision model.**
 *Calibrated Choice / Noul / Score inference from a 395M ModernBERT encoder, one forward pass, CPU-served.*
